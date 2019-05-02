@@ -166,6 +166,9 @@ func GetCredentials(c *Config) (*awsCredentials.Credentials, error) {
 		},
 	}
 
+	log.Printf("[INFO] How many providers? %q", len(providers))
+	log.Printf("[INFO] Getting credentials XYZ123: profile:%q - assume:%q", c.Profile, c.AssumeRoleARN)
+
 	// Build isolated HTTP client to avoid issues with globally-shared settings
 	client := cleanhttp.DefaultClient()
 
@@ -227,24 +230,50 @@ func GetCredentials(c *Config) (*awsCredentials.Credentials, error) {
 
 	// This is the "normal" flow (i.e. not assuming a role)
 	if c.AssumeRoleARN == "" {
+		log.Printf("[INFO] returning chain credentials")
 		return awsCredentials.NewChainCredentials(providers), nil
 	}
 
 	// Otherwise we need to construct and STS client with the main credentials, and verify
 	// that we can assume the defined role.
-	log.Printf("[INFO] Attempting to AssumeRole %s (SessionName: %q, ExternalId: %q, Policy: %q)",
+	log.Printf("[INFO] Attempting to AssumeRole XYZ123 %s (SessionName: %q, ExternalId: %q, Policy: %q)",
 		c.AssumeRoleARN, c.AssumeRoleSessionName, c.AssumeRoleExternalID, c.AssumeRolePolicy)
 
 	creds := awsCredentials.NewChainCredentials(providers)
 	cp, err := creds.Get()
 	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == "NoCredentialProviders" {
-			return nil, errors.New(`No valid credential sources found for AWS Provider.
-  Please see https://terraform.io/docs/providers/aws/index.html for more information on
-  providing credentials for the AWS Provider`)
-		}
+		if IsAWSErr(err, "NoCredentialProviders", "") {
+			log.Printf("[INFO] Need credentials to AssumeRole but unable to get any yet - attempting session derived")
 
-		return nil, fmt.Errorf("Error loading credentials for AWS Provider: %s", err)
+			options, err := GetSessionOptions(c)
+			if err != nil {
+				log.Printf("[ERROR] Unable to get session options, error %q", err)
+				return nil, err
+			}
+
+			sess, err := session.NewSessionWithOptions(*options)
+			if err != nil {
+				log.Printf("[ERROR] Creating new session failed with error %q", err)
+				return nil, errors.New(`No valid credential sources found for AWS Provider.
+Please see https://terraform.io/docs/providers/aws/index.html for more information on
+providing credentials for the AWS Provider`)
+			}
+
+			_, err = sess.Config.Credentials.Get()
+			if err != nil {
+				log.Printf("[ERROR] Getting session derived credentials failed with error %q", err)
+				return nil, errors.New(`No valid credential sources found for AWS Provider.
+Please see https://terraform.io/docs/providers/aws/index.html for more information on
+providing credentials for the AWS Provider`)
+			}
+			log.Printf("[INFO] Using session-derived AWS Auth")
+
+		} else {
+			log.Printf("[ERROR] Error getting credentials: %q", err)
+			return nil, errors.New(`No valid credential sources found for AWS Provider.
+Please see https://terraform.io/docs/providers/aws/index.html for more information on
+providing credentials for the AWS Provider`)
+		}
 	}
 
 	log.Printf("[INFO] AWS Auth provider used: %q", cp.ProviderName)
@@ -294,6 +323,7 @@ func GetCredentials(c *Config) (*awsCredentials.Credentials, error) {
 		return nil, fmt.Errorf("Error loading credentials for AWS Provider: %s", err)
 	}
 
+	log.Printf("[INFO] Successfully got credentials and assumed role")
 	return assumeRoleCreds, nil
 }
 

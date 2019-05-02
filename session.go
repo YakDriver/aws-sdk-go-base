@@ -28,44 +28,13 @@ func GetSessionOptions(c *Config) (*session.Options, error) {
 		},
 	}
 
-	creds, err := GetCredentials(c)
-	if err != nil {
-		return nil, err
-	}
+	log.Printf("[INFO] Getting session options XYZ123: profile:%q - assume:%q", c.Profile, c.AssumeRoleARN)
+	log.Printf("[INFO] skip creds validations %q", c.SkipCredsValidation)
 
-	// Call Get to check for credential provider. If nothing found, we'll get an
-	// error, and we can present it nicely to the user
-	cp, err := creds.Get()
-	if err != nil {
-		if IsAWSErr(err, "NoCredentialProviders", "") {
-			// If a profile wasn't specified, the session may still be able to resolve credentials from shared config.
-			if c.Profile == "" {
-				sess, err := session.NewSession()
-				if err != nil {
-					return nil, errors.New(`No valid credential sources found for AWS Provider.
-	Please see https://terraform.io/docs/providers/aws/index.html for more information on
-	providing credentials for the AWS Provider`)
-				}
-				_, err = sess.Config.Credentials.Get()
-				if err != nil {
-					return nil, errors.New(`No valid credential sources found for AWS Provider.
-	Please see https://terraform.io/docs/providers/aws/index.html for more information on
-	providing credentials for the AWS Provider`)
-				}
-				log.Printf("[INFO] Using session-derived AWS Auth")
-				options.Config.Credentials = sess.Config.Credentials
-			} else {
-				log.Printf("[INFO] AWS Auth using Profile: %q", c.Profile)
-				options.Profile = c.Profile
-				options.SharedConfigState = session.SharedConfigEnable
-			}
-		} else {
-			return nil, fmt.Errorf("Error loading credentials for AWS Provider: %s", err)
-		}
-	} else {
-		// add the validated credentials to the session options
-		log.Printf("[INFO] AWS Auth provider used: %q", cp.ProviderName)
-		options.Config.Credentials = creds
+	if c.Profile != "" {
+		log.Printf("[INFO] AWS Auth using Profile: %q", c.Profile)
+		options.Profile = c.Profile
+		options.SharedConfigState = session.SharedConfigEnable
 	}
 
 	if c.Insecure {
@@ -85,11 +54,19 @@ func GetSessionOptions(c *Config) (*session.Options, error) {
 
 // GetSession attempts to return valid AWS Go SDK session
 func GetSession(c *Config) (*session.Session, error) {
-	options, err := GetSessionOptions(c)
 
+	creds, err := GetCredentials(c)
+	if err != nil {
+		log.Printf("[INFO] errored on get creds, leaving get session options")
+		return nil, err
+	}
+
+	options, err := GetSessionOptions(c)
 	if err != nil {
 		return nil, err
 	}
+
+	options.Config.Credentials = creds
 
 	sess, err := session.NewSessionWithOptions(*options)
 	if err != nil {
